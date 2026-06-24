@@ -1,4 +1,10 @@
-import type { AppContext, AppModule } from '@/app/app-context';
+import type {
+  AppContext,
+  AppModule,
+  UnifiedSettingsController,
+  UnifiedSettingsTabId,
+} from '@/app/app-context';
+import type { UnifiedSettingsConfig } from '@/components/UnifiedSettings';
 import type { AirlineIntelPanel } from '@/components/AirlineIntelPanel';
 import type { CustomWidgetPanel } from '@/components/CustomWidgetPanel';
 import { openWidgetChatModal } from '@/components/WidgetChatModal';
@@ -81,7 +87,6 @@ import { invokeTauri } from '@/services/tauri-bridge';
 import { getCachedGpsInterference } from '@/services/gps-interference';
 import { dataFreshness } from '@/services/data-freshness';
 import { mlWorker } from '@/services/ml-worker';
-import { UnifiedSettings } from '@/components/UnifiedSettings';
 import { WM_OPEN_NOTIFICATIONS_FOR_COUNTRY } from '@/utils/notify-country-link';
 import { AuthLauncher } from '@/components/AuthLauncher';
 import { AuthHeaderWidget } from '@/components/AuthHeaderWidget';
@@ -91,6 +96,70 @@ import { getAuthState, subscribeAuthState } from '@/services/auth-state';
 import { setTrustedHtml, trustedHtml } from '@/utils/dom-utils';
 import { escapeHtml } from '@/utils/sanitize';
 import { buildEmbedIframeSnippet, buildEmbedMapUrl, type EmbedVariant } from '@/embed/embed-url';
+import { createSettingsButton } from '@/components/settings-button';
+
+type RealUnifiedSettings = import('@/components/UnifiedSettings').UnifiedSettings;
+
+class LazyUnifiedSettings implements UnifiedSettingsController {
+  private readonly button: HTMLButtonElement;
+  private instance: RealUnifiedSettings | null = null;
+  private loadPromise: Promise<RealUnifiedSettings> | null = null;
+  private destroyed = false;
+
+  constructor(private readonly config: UnifiedSettingsConfig) {
+    this.button = createSettingsButton(() => this.open());
+  }
+
+  getButton(): HTMLButtonElement {
+    return this.button;
+  }
+
+  open(tab?: UnifiedSettingsTabId): void {
+    void this.load().then((settings) => {
+      if (!this.destroyed) settings.open(tab);
+    }).catch((error) => {
+      // A rejection because the controller was torn down mid-load is a
+      // deliberate unmount, not a failure the user should be toasted about.
+      if (this.destroyed) return;
+      console.warn('[settings] Failed to load settings window:', error);
+      showToast(t('common.error'));
+    });
+  }
+
+  refreshPanelToggles(): void {
+    this.instance?.refreshPanelToggles();
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+    this.instance?.destroy();
+    this.instance = null;
+  }
+
+  private load(): Promise<RealUnifiedSettings> {
+    if (this.destroyed) {
+      return Promise.reject(new Error('Settings controller destroyed'));
+    }
+    if (this.instance) return Promise.resolve(this.instance);
+    if (this.loadPromise) return this.loadPromise;
+
+    this.loadPromise = import('@/components/UnifiedSettings')
+      .then(({ UnifiedSettings }) => {
+        const settings = new UnifiedSettings(this.config);
+        if (this.destroyed) {
+          settings.destroy();
+          throw new Error('Settings controller destroyed during load');
+        }
+        this.instance = settings;
+        return settings;
+      })
+      .finally(() => {
+        this.loadPromise = null;
+      });
+
+    return this.loadPromise;
+  }
+}
 
 
 export interface EventHandlerCallbacks {
@@ -1578,7 +1647,7 @@ export class EventHandlerManager implements AppModule {
   }
 
   setupUnifiedSettings(): void {
-    this.ctx.unifiedSettings = new UnifiedSettings({
+    this.ctx.unifiedSettings = new LazyUnifiedSettings({
       getPanelSettings: () => this.ctx.panelSettings,
       savePanelSettings: (panels: Record<string, PanelConfig>) => {
         Object.entries(panels).forEach(([key, nextConfig]) => {
