@@ -5,6 +5,11 @@ import {
   createDeferredPanelShell,
   shouldDeferInitialPanelMount,
 } from '@/app/panel-mount-deferral';
+import {
+  addResponsiveZoneListener,
+  removeResponsiveZoneListener,
+  type ResponsiveZoneListener,
+} from '@/app/responsive-zone-listener';
 import { getAlertsNearLocation } from '@/services/geo-convergence';
 import { effectivePubDateMs } from '@/services/feed-date';
 import type { ClusteredEvent, MapLayers, PanelConfig } from '@/types';
@@ -163,6 +168,7 @@ export class PanelLayoutManager implements AppModule {
   private unsubscribePaymentFailureBanner: (() => void) | null = null;
   private scheduledLoadAllRaf: number | null = null;
   private scheduledLoadAllIdle: number | null = null;
+  private responsiveZoneListener: ResponsiveZoneListener | null = null;
 
   constructor(ctx: AppContext, callbacks: PanelLayoutManagerCallbacks) {
     this.ctx = ctx;
@@ -298,6 +304,7 @@ export class PanelLayoutManager implements AppModule {
 
   async init(): Promise<void> {
     await this.renderLayout();
+    if (this.ctx.isDestroyed) return;
 
     // Subscribe to auth state for reactive panel gating on web
     this.unsubscribeAuth = subscribeAuthState((state) => {
@@ -382,7 +389,8 @@ export class PanelLayoutManager implements AppModule {
     // Reset checkout overlay so next layout init can register its callback
     destroyCheckoutOverlay();
 
-    window.removeEventListener('resize', this.ensureCorrectZones);
+    removeResponsiveZoneListener(this.responsiveZoneListener);
+    this.responsiveZoneListener = null;
   }
 
   /** Reactively update premium panel gating based on auth state. */
@@ -1346,7 +1354,7 @@ export class PanelLayoutManager implements AppModule {
     // uses — construction, the supply-chain bridge replay, the resilienceScore tweak,
     // initEscalationGetters/getTimeRange and onTimeRangeChanged — are grouped together
     // after the registration block (just before the onTimeRangeChanged wiring).
-    // Failed-fetch reload guard: src/main.ts:690-758.
+    // Failed-fetch reload guard: src/main.ts:285-290 (installChunkReloadGuard).
     const mapModulePromise = import('@/components/MapContainer');
 
     this.createNewsPanel('politics', 'panels.politics');
@@ -2078,13 +2086,21 @@ export class PanelLayoutManager implements AppModule {
       });
     }
 
-    window.addEventListener('resize', () => this.ensureCorrectZones());
+    removeResponsiveZoneListener(this.responsiveZoneListener);
+    this.responsiveZoneListener = addResponsiveZoneListener(
+      window,
+      this.getUltraWideMinWidth(),
+      () => this.ensureCorrectZones(),
+    );
 
-    // Map's direct-deref block (moved here from the top of createPanels by U3 #4459):
-    // awaited only after panel registration so the fetch overlaps it. Everything above
+    // Map's direct-deref block (kept here, after panel registration, by U3 #4459):
+    // awaited only after registration so the chunk fetch overlaps it. Everything above
     // that touches the map does so via `?.` at mount/click time, so the map can be
-    // constructed here without breaking registration.
+    // constructed here without breaking registration. The responsive zone listener is
+    // wired above (before this await) so a destroy() during the fetch tears it down;
+    // the isDestroyed guard below also stops a destroyed manager from building a map.
     const { MapContainer } = await mapModulePromise;
+    if (this.ctx.isDestroyed) return;
     this.ctx.map = new MapContainer(mapContainer, {
       zoom: this.ctx.isMobile ? 2.5 : 1.0,
       pan: { x: 0, y: 0 },
@@ -2491,11 +2507,14 @@ export class PanelLayoutManager implements AppModule {
     return new Set();
   }
 
+  private getUltraWideMinWidth(): number {
+    return this.ctx.isDesktopApp ? 900 : 1600;
+  }
+
   private getEffectiveUltraWide(): boolean {
     const mapSection = document.getElementById('mapSection');
     const mapEnabled = !mapSection?.classList.contains('hidden');
-    const minWidth = this.ctx.isDesktopApp ? 900 : 1600;
-    return window.innerWidth >= minWidth && mapEnabled;
+    return window.innerWidth >= this.getUltraWideMinWidth() && mapEnabled;
   }
 
   private insertByOrder(grid: HTMLElement, el: HTMLElement, key: string): void {
