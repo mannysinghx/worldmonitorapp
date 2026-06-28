@@ -13,11 +13,15 @@ if [ -d /run/secrets ]; then
   done
 fi
 
+# Public port nginx listens on. Defaults to 8080 (Docker Compose maps it),
+# but PaaS platforms such as Railway, Render and Fly inject their own $PORT
+# at runtime — honor it so the platform's routing reaches the container.
+export PORT="${PORT:-8080}"
 export LOCAL_API_PORT="${LOCAL_API_PORT:-46123}"
 if [ -z "${LOCAL_API_TOKEN:-}" ]; then
   LOCAL_API_TOKEN="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))")"
   export LOCAL_API_TOKEN
 fi
 
-envsubst '$LOCAL_API_PORT $LOCAL_API_TOKEN' < /etc/nginx/nginx.conf.template > /tmp/nginx.conf
+envsubst '$PORT $LOCAL_API_PORT $LOCAL_API_TOKEN' < /etc/nginx/nginx.conf.template > /tmp/nginx.conf
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/worldmonitor.conf

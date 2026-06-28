@@ -89,6 +89,8 @@ npm run dev:energy     # energy.worldmonitor.app
 
 See the **[self-hosting guide](https://www.worldmonitor.app/docs/getting-started)** for deployment options (Vercel, Docker, static).
 
+Deploying to **Railway**? See **[docs/RAILWAY.md](docs/RAILWAY.md)** — the repo ships a `railway.json` that builds the production `Dockerfile` and binds Railway's injected `$PORT` automatically.
+
 ---
 
 ## Tech Stack
