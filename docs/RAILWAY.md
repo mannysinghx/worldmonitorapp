@@ -33,9 +33,19 @@ builder and a health check:
 ```jsonc
 {
   "build":  { "builder": "DOCKERFILE", "dockerfilePath": "Dockerfile" },
-  "deploy": { "healthcheckPath": "/api/health", "restartPolicyType": "ON_FAILURE" }
+  "deploy": { "healthcheckPath": "/", "restartPolicyType": "ON_FAILURE" }
 }
 ```
+
+> **Why the health check targets `/` and not `/api/health`:** `/api/health` is a
+> *data-readiness* probe — it returns **503 (`REDIS_DOWN`)** whenever no Redis
+> cache is configured (see [`api/health.js`](../api/health.js)). Since the
+> dashboard is designed to run fine without the cache, gating Railway's
+> liveness probe on `/api/health` makes a perfectly healthy container fail its
+> health check and get killed. `/` (the nginx-served SPA) returns `200` as soon
+> as the web server is up, which is the correct liveness signal. Once you add
+> the Redis layer (§2) you can switch the probe back to `/api/health` for true
+> data-readiness checks.
 
 > **Note on `nixpacks.toml`:** the repo also ships a root `nixpacks.toml` that
 > the upstream maintainer uses for a *separate* AIS-relay service. Because
@@ -50,8 +60,9 @@ injects `$PORT` automatically — **do not** hard-code a `PORT` variable.
 
 ### Health check
 
-`/api/health` returns `200` as soon as nginx + the Node API are up (it reports
-`0/N OK` until the cache is seeded — that is expected without the Redis layer).
+Railway probes `/` (the SPA), which returns `200` as soon as nginx is serving.
+`/api/health` is a richer *data-readiness* endpoint but returns `503` without a
+Redis cache — see the note above for why it is not used as the liveness probe.
 
 ### Minimum environment variables
 
